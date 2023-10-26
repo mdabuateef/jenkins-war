@@ -81,6 +81,7 @@ pipeline {
                     def tomcatWebappsDir = '/opt/tomcat/webapps'
  
                     // Copy the downloaded artifact to the Tomcat webapps directory
+                    sh 'sudo rm -r /opt/tomcat/webapps/*.war'
                     sh "sudo cp ${artifactId}-${version}.${packaging} ${tomcatWebappsDir}/"
                 }
             }
