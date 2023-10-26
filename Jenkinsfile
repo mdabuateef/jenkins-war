@@ -1,77 +1,89 @@
 pipeline {
-    agent {  label "master"    }
-    
+    agent any
+    tools {
+        maven 'Maven'
+    }
+ 
     stages {
-        // Step 1
-        stage('SCM') {
-                steps {
-                    git 'https://github.com/webdevprashant/jenkins-training-CI-CD-Day6.git'
-                }        
+        stage('Source') {
+            steps {
+                git branch: 'main', url: 'https://github.com/mdabuateef/jenkins-war.git'
+            }
         }
-        // Step 2
-        stage('Build by Maven') {
-                steps {
-                    sh 'mvn clean package'
-                }
-        }
-        
-        // Step 3
-        stage('Build docker image') {
-                steps {
-                    sh "sudo docker build -t webdevprashant/javaapp-day6:${BUILD_NUMBER} ."
-                }
-        }
-        
-        // Step 4
-        stage('Push docker image') {
-                steps {
-                    withCredentials([string(credentialsId: 'Docker_hub_password', variable: 'VAR_FOR_DOCKERPASS')]) {
-                    sh "sudo docker login -u webdevprashant -p $VAR_FOR_DOCKERPASS"
+ 
+        stage('Build') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    withMaven {
+                        sh 'mvn clean verify sonar:sonar'
                     }
-                    sh "sudo docker push webdevprashant/javaapp-day6:${BUILD_NUMBER}"
                 }
-        }
-        
-        // Step 5 
-        stage('Deploy Java App in  Dev Env') {
-                steps {
-                        sh "sudo docker rm -f myjavaappdevenv"
-                        sh "sudo docker run  -d -p 1222:8080 --name myjavaappdevenv webdevprashant/javaapp-day6:${BUILD_NUMBER}"
-                }
-        }
-        
-        // Step 6  in  Redhat CLI 1 
-        stage('Deploy Java in QA/Test Env') {
-            steps {
-                    // sshagent(['QA_ENV_SSH_CRED']) {
-                        // sh "ssh root@192.168.43.229 docker rm -f myjavaapp"
-                        // sh "ssh root@192.168.43.229 docker run  -d -p 8080:8080 --name myjavaapp webdevprashant/javaapp-day6:${BUILD_NUMBER}"
-            sh "sudo docker rm -f myjavaappqatestenv"            
-            sh "sudo docker run  -d -p 1223:8080 --name myjavaappqatestenv webdevprashant/javaapp-day6:${BUILD_NUMBER}"           
-                    // }
             }
         }
-            
-        stage('QAT Test') {
+        stage('Publish to Nexus Repository Manager') {
             steps {
-        	// bcz tomcat take some sec. to display data , so apply some delay here        
-                retry(30) {
-                    sh 'curl --silent http://192.168.43.56:1223/java-web-app/ |  grep India'
-                }   
+                script {
+                    pom = readMavenPom file: "pom.xml"
+                    filesByGlob = findFiles(glob: "target/*.${pom.packaging}")
+                    artifactPath = filesByGlob[0].path
+                    artifactExists = fileExists artifactPath
+                    if (artifactExists) {
+                        echo "*** File: ${artifactPath}, group: ${pom.groupId}, packaging: ${pom.packaging}, version ${pom.version}"
+                        nexusArtifactUploader(
+                            nexusVersion: 'nexus3',
+                            protocol: 'http',
+                            nexusUrl: '65.0.89.234:8081/', // Corrected URL
+                            groupId: 'pom.com.mt',
+                            version: 'pom.2.0',
+                            repository: 'abuateef',
+                            credentialsId: 'abuateef',
+                            artifacts: [
+                                [
+                                    artifactId: 'pom.java-web-app',
+                                    classifier: '',
+                                    file: artifactPath,
+                                    type: pom.packaging
+                                ],
+                                [
+                                    artifactId: 'pom.java-web-app',
+                                    classifier: '',
+                                    file: "pom.xml",
+                                    type: "pom"
+                                ]
+                            ]
+                        )
+                    } else {
+                        error "*** File: ${artifactPath}, could not be found"
+                    }
+                }
             }
         }
-        
-        // Step  in Redhat 8 CLI 2
-        stage('Deploy webAPP in Prod Env') {
+        stage('Pull Artifact from Nexus') {
             steps {
-               
-            //   sshagent(['QA_ENV_SSH_CRED']) {                    
-                        // sh "ssh root@192.168.43.229 docker rm -f myjavaapp"
-                        // sh "ssh root@192.168.43.229 docker run  -d -p 8080:8080 --name myjavaapp webdevprashant/javaapp-day6:${BUILD_NUMBER}"                   
-                // }
-                sh "sudo docker rm -f myjavaappprodenv"
-                sh "sudo docker run  -d -p 1224:8080 --name myjavaappprodenv webdevprashant/javaapp-day6:${BUILD_NUMBER}"  
+                script {
+                    def nexusRepoUrl = 'http://65.0.89.234:8081/repository/abuateef/'
+                    def groupId = 'pom.com.mt'
+                    def artifactId = 'pom.java-web-app'
+                    def version = 'pom.2.0'
+                    def packaging = 'war'
+ 
+                    // Download the artifact
+                    sh "curl -O ${nexusRepoUrl}/${groupId}/${artifactId}/${version}/${artifactId}-${version}.${packaging}"
+                }
+            }
+        }
+        stage('Deploy to Tomcat') {
+            steps {
+                script {
+                    def artifactId = 'pom.java-web-app'
+                    def version = 'pom.2.0'
+                    def packaging = 'war'
+                    def tomcatWebappsDir = '/opt/tomcat/webapps'
+ 
+                    // Copy the downloaded artifact to the Tomcat webapps directory
+                    sh "sudo cp ${artifactId}-${version}.${packaging} ${tomcatWebappsDir}/"
+                }
             }
         }
     }
-}      
+}
